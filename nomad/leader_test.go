@@ -8,7 +8,10 @@ import (
 	"time"
 
 	"github.com/hashicorp/consul/testutil/retry"
+	"github.com/hashicorp/go-hclog"
 	memdb "github.com/hashicorp/go-memdb"
+	"github.com/hashicorp/go-version"
+	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/state"
 	"github.com/hashicorp/nomad/nomad/structs"
@@ -627,6 +630,175 @@ func TestLeader_RestoreVaultAccessors(t *testing.T) {
 	if len(tvc.RevokedTokens) != 1 && tvc.RevokedTokens[0].Accessor != va.Accessor {
 		t.Fatalf("Bad revoked accessors: %v", tvc.RevokedTokens)
 	}
+}
+
+func TestLeader_ClusterID(t *testing.T) {
+	t.Parallel()
+
+	s1 := TestServer(t, func(c *Config) {
+		c.NumSchedulers = 0
+		c.Build = minClusterIDVersion.String()
+	})
+	defer s1.Shutdown()
+	testutil.WaitForLeader(t, s1.RPC)
+
+	clusterID, err := s1.ClusterID()
+
+	require.NoError(t, err)
+	require.True(t, helper.IsUUID(clusterID))
+}
+
+func TestLeader_ClusterID_upgradePath(t *testing.T) {
+	t.Parallel()
+
+	before := version.Must(version.NewVersion("0.10.1")).String()
+	after := minClusterIDVersion.String()
+
+	outdated := func(bootstrap bool) *Server {
+		return TestServer(t, func(c *Config) {
+			c.NumSchedulers = 0
+			c.Build = before
+			c.DevDisableBootstrap = bootstrap
+			c.Logger.SetLevel(hclog.Error)
+		})
+	}
+
+	upgraded := func(bootstrap bool) *Server {
+		return TestServer(t, func(c *Config) {
+			c.NumSchedulers = 0
+			c.Build = after
+			c.DevDisableBootstrap = bootstrap
+			c.Logger.SetLevel(hclog.Error)
+		})
+	}
+
+	servers := []*Server{outdated(false), outdated(true), outdated(true)}
+	// fallback shutdown attempt in case testing fails
+	defer servers[0].Shutdown()
+	defer servers[1].Shutdown()
+	defer servers[2].Shutdown()
+
+	upgrade := func(i int) {
+		previous := servers[i]
+
+		servers[i] = upgraded(true)
+		TestJoin(t, servers[i], servers[(i+1)%3], servers[(i+2)%3])
+		testutil.WaitForLeader(t, servers[i].RPC)
+
+		require.NoError(t, previous.Leave())
+		require.NoError(t, previous.Shutdown())
+	}
+
+	// Join the servers before doing anything
+	TestJoin(t, servers[0], servers[1], servers[2])
+
+	// Wait for servers to settle
+	for i := 0; i < len(servers); i++ {
+		testutil.WaitForLeader(t, servers[i].RPC)
+	}
+
+	// A check that ClusterID is not available yet
+	noIDYet := func() {
+		for _, s := range servers {
+			retry.Run(t, func(r *retry.R) {
+				_, err := s.ClusterID()
+				require.Error(t, err)
+			})
+		}
+	}
+
+	// Replace first old server with new server
+	upgrade(0)
+	defer servers[0].Shutdown()
+	noIDYet() // ClusterID should not work yet, servers: [new, old, old]
+
+	// Replace second old server with new server
+	upgrade(1)
+	defer servers[1].Shutdown()
+	noIDYet() // ClusterID should not work yet, servers: [new, new, old]
+
+	// Replace third / final old server with new server
+	upgrade(2)
+	defer servers[2].Shutdown()
+
+	// Wait for old servers to really be gone
+	for _, s := range servers {
+		testutil.WaitForResult(func() (bool, error) {
+			peers, _ := s.numPeers()
+			return peers == 3, nil
+		}, func(_ error) {
+			t.Fatalf("should have 3 peers")
+		})
+	}
+
+	// Now we can tickle the leader into making a cluster ID
+	leaderID := ""
+	for _, s := range servers {
+		if s.IsLeader() {
+			id, err := s.ClusterID()
+			require.NoError(t, err)
+			leaderID = id
+			break
+		}
+	}
+	require.True(t, helper.IsUUID(leaderID))
+
+	// Now every participating server has been upgraded, each one should be
+	// able to get the cluster ID, having been plumbed all the way through.
+	agreeClusterID(t, servers)
+}
+
+func TestLeader_ClusterID_noUpgrade(t *testing.T) {
+	t.Parallel()
+
+	servers := []*Server{
+		TestServer(t, func(c *Config) {
+			c.Logger.SetLevel(hclog.Error)
+			c.NumSchedulers = 0
+			c.Build = minClusterIDVersion.String()
+		}),
+		TestServer(t, func(c *Config) {
+			c.Logger.SetLevel(hclog.Error)
+			c.NumSchedulers = 0
+			c.Build = minClusterIDVersion.String()
+			c.DevDisableBootstrap = true
+		}),
+		TestServer(t, func(c *Config) {
+			c.Logger.SetLevel(hclog.Error)
+			c.NumSchedulers = 0
+			c.Build = minClusterIDVersion.String()
+			c.DevDisableBootstrap = true
+		}),
+	}
+	defer servers[0].Shutdown()
+	defer servers[1].Shutdown()
+	defer servers[2].Shutdown()
+
+	// Join the servers before doing anything
+	TestJoin(t, servers[0], servers[1], servers[2])
+
+	// Wait for servers to settle
+	for i := 0; i < len(servers); i++ {
+		testutil.WaitForLeader(t, servers[i].RPC)
+	}
+
+	// Each server started at the minimum version, check there should be only 1
+	// cluster ID they all agree on.
+	agreeClusterID(t, servers)
+}
+
+func agreeClusterID(t *testing.T, servers []*Server) {
+	retries := &retry.Timer{Timeout: 60 * time.Second, Wait: 1 * time.Second}
+	ids := make([]string, 3)
+	for i, s := range servers {
+		retry.RunWith(retries, t, func(r *retry.R) {
+			id, err := s.ClusterID()
+			require.NoError(t, err)
+			require.True(t, helper.IsUUID(id))
+			ids[i] = id
+		})
+	}
+	require.True(t, ids[0] == ids[1] && ids[1] == ids[2], "id[0] %s, id[1] %s, id[2] %s")
 }
 
 func TestLeader_ReplicateACLPolicies(t *testing.T) {
