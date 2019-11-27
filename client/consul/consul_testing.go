@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	log "github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/nomad/nomad/structs"
 
 	"github.com/hashicorp/nomad/command/agent/consul"
 	testing "github.com/mitchellh/go-testing-interface"
@@ -102,6 +103,11 @@ func (m *MockConsulServiceClient) UpdateTTL(checkID, output, status string) erro
 	// appear in live code.
 	m.logger.Trace("UpdateTTL", "check_id", checkID, "status", status)
 	return nil
+}
+
+func (m *MockConsulServiceClient) DeriveSITokens(alloc *structs.Allocation, tasks []string) (map[string]string, error) {
+	// TODO(shoenig): implement this mock
+	return nil, nil
 }
 
 func (m *MockConsulServiceClient) GetOps() []MockConsulOp {

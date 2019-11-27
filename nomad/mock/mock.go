@@ -407,6 +407,7 @@ func BatchJob() *structs.Job {
 		Priority:    50,
 		AllAtOnce:   false,
 		Datacenters: []string{"dc1"},
+
 		TaskGroups: []*structs.TaskGroup{
 			{
 				Name:  "web",
