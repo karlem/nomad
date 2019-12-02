@@ -158,7 +158,7 @@ type TaskRunner struct {
 	// registering services and checks
 	consulClient consul.ConsulServiceAPI
 
-	// siClient is the client used by the service identity hook for managing
+	// sidsClient is the client used by the service identity hook for managing
 	// service identity tokens
 	siClient consul.ServiceIdentityAPI
 

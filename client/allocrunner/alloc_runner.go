@@ -62,9 +62,9 @@ type allocRunner struct {
 	// registering services and checks
 	consulClient consul.ConsulServiceAPI
 
-	// siClient is the client used by the service identity hook for
+	// sidsClient is the client used by the service identity hook for
 	// managing SI tokens
-	siClient consul.ServiceIdentityAPI
+	sidsClient consul.ServiceIdentityAPI
 
 	// vaultClient is the used to manage Vault tokens
 	vaultClient vaultclient.VaultClient

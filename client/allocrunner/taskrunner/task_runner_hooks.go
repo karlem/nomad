@@ -110,10 +110,10 @@ func (tr *TaskRunner) initHooks() {
 	if usesConnect(tr.alloc.Job.LookupTaskGroup(tr.alloc.TaskGroup)) {
 		fmt.Println("## uses connect")
 		tr.runnerHooks = append(tr.runnerHooks, newSIDSHook(sidsHookConfig{
-			alloc:    tr.Alloc(),
-			task:     tr.Task(),
-			siClient: tr.siClient,
-			logger:   hookLogger,
+			alloc:      tr.Alloc(),
+			task:       tr.Task(),
+			sidsClient: tr.siClient,
+			logger:     hookLogger,
 		}))
 	}
 

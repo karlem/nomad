@@ -74,10 +74,10 @@ func TestSIDSHook_deriveSIToken(t *testing.T) {
 	defer cleanupDir(t, secrets)
 
 	h := newSIDSHook(sidsHookConfig{
-		alloc:    &structs.Allocation{ID: "a1"},
-		task:     &structs.Task{Name: "task1"},
-		logger:   testlog.HCLogger(t),
-		siClient: consul.NewMockServiceIdentitiesClient(),
+		alloc:      &structs.Allocation{ID: "a1"},
+		task:       &structs.Task{Name: "task1"},
+		logger:     testlog.HCLogger(t),
+		sidsClient: consul.NewMockServiceIdentitiesClient(),
 	})
 
 	ctx := context.Background()

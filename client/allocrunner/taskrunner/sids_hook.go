@@ -37,18 +37,18 @@ const (
 )
 
 type sidsHookConfig struct {
-	alloc    *structs.Allocation
-	task     *structs.Task
-	siClient consul.ServiceIdentityAPI
-	logger   hclog.Logger
+	alloc      *structs.Allocation
+	task       *structs.Task
+	sidsClient consul.ServiceIdentityAPI
+	logger     hclog.Logger
 }
 
-// Consul Service Identity hook for managing SI tokens of connect enabled tasks.
+// Service Identities hook for managing SI tokens of connect enabled tasks.
 type sidsHook struct {
-	alloc    *structs.Allocation
-	taskName string
-	siClient consul.ServiceIdentityAPI
-	logger   hclog.Logger
+	alloc      *structs.Allocation
+	taskName   string
+	sidsClient consul.ServiceIdentityAPI
+	logger     hclog.Logger
 
 	lock     sync.Mutex
 	firstRun bool
@@ -56,11 +56,11 @@ type sidsHook struct {
 
 func newSIDSHook(c sidsHookConfig) *sidsHook {
 	return &sidsHook{
-		alloc:    c.alloc,
-		taskName: c.task.Name,
-		siClient: c.siClient,
-		logger:   c.logger.Named(sidsHookName),
-		firstRun: true,
+		alloc:      c.alloc,
+		taskName:   c.task.Name,
+		sidsClient: c.sidsClient,
+		logger:     c.logger.Named(sidsHookName),
+		firstRun:   true,
 	}
 }
 
@@ -76,16 +76,18 @@ func (h *sidsHook) Prestart(
 	h.lock.Lock()
 	defer h.lock.Unlock()
 
+	// do nothing if we have already done things
 	if h.earlyExit() {
 		return nil
 	}
 
-	// try to recover token from disk
+	// optimistically try to recover token from disk
 	token, err := h.recoverToken(req.TaskDir.SecretsDir)
 	if err != nil {
 		return err
 	}
 
+	// need to ask for a new SI token & persist it to disk
 	if token == "" {
 		if token, err = h.deriveSIToken(ctx); err != nil {
 			return err
@@ -99,7 +101,7 @@ func (h *sidsHook) Prestart(
 }
 
 // earlyExit returns true if the Prestart hook has already been executed during
-// the lifecycle of this task runner.
+// the instantiation of this task runner.
 //
 // assumes h is locked
 func (h *sidsHook) earlyExit() bool {
@@ -108,6 +110,15 @@ func (h *sidsHook) earlyExit() bool {
 		return false
 	}
 	return true
+}
+
+// writeToken writes token into the secrets directory for the task.
+func (h *sidsHook) writeToken(dir string, token string) error {
+	tokenPath := filepath.Join(dir, sidsTokenFile)
+	if err := ioutil.WriteFile(tokenPath, []byte(token), sidsTokenFilePerms); err != nil {
+		return errors.Wrap(err, "failed to write SI token")
+	}
+	return nil
 }
 
 // recoverToken returns the token saved to disk in the secrets directory for the
@@ -127,6 +138,9 @@ func (h *sidsHook) recoverToken(dir string) (string, error) {
 	return string(token), nil
 }
 
+// deriveSIToken spawns and waits on a goroutine which will make attempts to
+// derive an SI token until a token is successfully created, or ctx is signaled
+// done.
 func (h *sidsHook) deriveSIToken(ctx context.Context) (string, error) {
 	tokenCh := make(chan string)
 
@@ -144,9 +158,10 @@ func (h *sidsHook) deriveSIToken(ctx context.Context) (string, error) {
 	}
 }
 
+// tryDerive loops forever until a token is created, or ctx is done.
 func (h *sidsHook) tryDerive(ctx context.Context, ch chan<- string) {
 	for i := 0; backoff(ctx, i); i++ {
-		tokens, err := h.siClient.DeriveSITokens(h.alloc, []string{h.taskName})
+		tokens, err := h.sidsClient.DeriveSITokens(h.alloc, []string{h.taskName})
 		if err != nil {
 			h.logger.Warn("failed to derive SI token", "attempt", i, "error", err)
 			continue
@@ -168,19 +183,11 @@ func backoff(ctx context.Context, i int) bool {
 
 func computeBackoff(attempt int) time.Duration {
 	switch {
-	case attempt == 0:
+	case attempt <= 0:
 		return 0
 	case attempt >= 4:
 		return sidsBackoffLimit
 	default:
 		return (1 << (2 * uint(attempt))) * sidsBackoffBaseline
 	}
-}
-
-func (h *sidsHook) writeToken(dir string, token string) error {
-	tokenPath := filepath.Join(dir, sidsTokenFile)
-	if err := ioutil.WriteFile(tokenPath, []byte(token), sidsTokenFilePerms); err != nil {
-		return errors.Wrap(err, "failed to write SI token")
-	}
-	return nil
 }
