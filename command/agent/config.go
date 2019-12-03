@@ -1064,6 +1064,14 @@ func (c *Config) Merge(b *Config) *Config {
 	return &result
 }
 
+func (c *Config) GetNormalizedAddrs() *Addresses {
+	return c.normalizedAddrs
+}
+
+func (c *Config) NormalizeAddrs() error {
+	return c.normalizeAddrs()
+}
+
 // normalizeAddrs normalizes Addresses and AdvertiseAddrs to always be
 // initialized and have sane defaults.
 func (c *Config) normalizeAddrs() error {
