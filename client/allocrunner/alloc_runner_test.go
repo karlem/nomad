@@ -143,7 +143,6 @@ func TestAllocRunner_TaskLeader_KillTG(t *testing.T) {
 
 func TestAllocRunner_TaskGroup_ShutdownDelay(t *testing.T) {
 	t.Parallel()
-	shutdownDelay := 1 * time.Second
 
 	alloc := mock.Alloc()
 	tr := alloc.AllocatedResources.Tasks[alloc.Job.TaskGroups[0].Tasks[0].Name]
@@ -170,6 +169,7 @@ func TestAllocRunner_TaskGroup_ShutdownDelay(t *testing.T) {
 	alloc.AllocatedResources.Tasks[task2.Name] = tr
 
 	// Set a shutdown delay
+	shutdownDelay := 1 * time.Second
 	alloc.Job.TaskGroups[0].ShutdownDelay = &shutdownDelay
 
 	conf, cleanup := testAllocRunnerConfig(t, alloc)
